@@ -16,13 +16,13 @@ class Object_Sync_Sf_Activate {
 
 	protected $wpdb;
 	protected $version;
+	protected $user_installed_version;
 	protected $slug;
 	protected $option_prefix;
 	protected $schedulable_classes;
 	protected $queue;
 
 	private $action_group_suffix;
-	private $user_installed_version;
 
 	/**
 	* Constructor which sets up activate hooks
@@ -35,7 +35,7 @@ class Object_Sync_Sf_Activate {
 	* @param object $queue
 	*
 	*/
-	public function __construct( $wpdb, $version, $slug, $option_prefix = '', $schedulable_classes = array(), $queue = '' ) {
+	public function __construct( $wpdb, $version, $slug, $option_prefix = '', $schedulable_classes = array(), $queue = '', $user_installed_version = '' ) {
 		$this->wpdb                = $wpdb;
 		$this->version             = $version;
 		$this->slug                = $slug;
@@ -44,7 +44,7 @@ class Object_Sync_Sf_Activate {
 		$this->queue               = $queue;
 
 		$this->action_group_suffix    = '_check_records';
-		$this->user_installed_version = get_option( $this->option_prefix . 'db_version', '' );
+		$this->user_installed_version = isset( $user_installed_version ) ? $user_installed_version : get_option( $this->option_prefix . 'db_version', '' );
 
 		$this->add_actions();
 	}
@@ -92,6 +92,7 @@ class Object_Sync_Sf_Activate {
 			label varchar(64) NOT NULL DEFAULT '',
 			name varchar(64) NOT NULL DEFAULT '',
 			wordpress_object varchar(128) NOT NULL DEFAULT '',
+			wordpress_object_default_status varchar(255) NOT NULL DEFAULT '',
 			salesforce_object varchar(255) NOT NULL DEFAULT '',
 			salesforce_record_types_allowed longblob,
 			salesforce_record_type_default varchar(255) NOT NULL DEFAULT '',

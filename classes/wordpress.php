@@ -23,6 +23,7 @@ class Object_Sync_Sf_WordPress {
 
 	public $wordpress_objects;
 	public $options;
+	public $all_draft_statuses;
 
 	public $sfwp_transients;
 	public $debug;
@@ -46,15 +47,21 @@ class Object_Sync_Sf_WordPress {
 		$this->logging       = $logging;
 		$this->option_prefix = isset( $option_prefix ) ? $option_prefix : 'object_sync_for_salesforce_';
 
-		add_action( 'admin_init', function() {
-			$this->wordpress_objects = $this->get_object_types();
-		} );
+		add_action(
+			'admin_init',
+			function() {
+				$this->wordpress_objects = $this->get_object_types();
+			}
+		);
 
 		$this->options = array(
 			'cache'            => true,
 			'cache_expiration' => $this->cache_expiration( 'wordpress_data_cache', 86400 ),
 			'type'             => 'read',
 		);
+
+		// statuses that are considered drafts
+		$this->all_draft_statuses = array( 'draft', 'pending', 'hold' ); // see wp-includes/comment.php and wp-includes/post.php
 
 		$this->sfwp_transients = new Object_Sync_Sf_WordPress_Transient( 'sfwp_transients' );
 
@@ -396,6 +403,50 @@ class Object_Sync_Sf_WordPress {
 	}
 
 	/**
+	 * Get WordPress statuses based on what object it is
+	 *
+	 * @param string $object_type The type of object.
+	 * @return array $wordpress_statuses
+	 */
+	public function get_wordpress_object_statuses( $object_type ) {
+		$wordpress_statuses = array();
+		if ( 'user' === $object_type ) {
+			$wordpress_statuses = array();
+		} elseif ( 'post' === $object_type || 'attachment' === $object_type ) {
+			$wordpress_statuses = get_post_statuses();
+		} elseif ( 'category' === $object_type || 'tag' === $object_type || 'post_tag' === $object_type ) {
+			$wordpress_statuses = array();
+		} elseif ( 'comment' === $object_type ) {
+			$wordpress_statuses = get_comment_statuses();
+		} else { // This is for custom post types.
+			$wordpress_statuses = get_post_statuses();
+		}
+
+		// in other places, we check for whether an object has drafts. this seems to be the best way to do that
+		$wordpress_statuses['all_draft_statuses'] = array_intersect_key( $wordpress_statuses, array_flip( $this->all_draft_statuses ) );
+		/*
+		 * Allow developers to change the WordPress object statuses.
+		 * The returned $wordpress_statuses needs to be an array like described above.
+		 * This is useful for custom objects, hidden fields, or custom formatting.
+		 * Here's an example of filters to add/modify data:
+		 *
+			add_filter( 'object_sync_for_salesforce_wordpress_object_statuses', 'modify_data', 10, 2 );
+			function modify_data( $wordpress_statuses, $object_type ) {
+				// Add a new status choice to specific WordPress objects such as 'post', 'page', 'user', a Custom Post Type, etc.
+				if ($object_type === 'user') {
+					$wordpress_statuses['member'] = 'Member';
+				}
+				return $wordpress_statuses;
+			}
+		*/
+
+		$wordpress_statuses = apply_filters( $this->option_prefix . 'wordpress_object_statuses', $wordpress_statuses, $object_type );
+
+		return $wordpress_statuses;
+
+	}
+
+	/**
 	 * Check to see if this API call exists in the cache
 	 * if it does, return the transient for that key
 	 *
@@ -587,11 +638,14 @@ class Object_Sync_Sf_WordPress {
 				if ( ! has_filter( $this->option_prefix . 'create_custom_wordpress_item' ) ) {
 					$result = $this->post_create( $params, $id_field, $name );
 				} else {
-					$result = apply_filters( $this->option_prefix . 'create_custom_wordpress_item', array(
-						'params'   => $params,
-						'name'     => $name,
-						'id_field' => $id_field,
-					) );
+					$result = apply_filters(
+						$this->option_prefix . 'create_custom_wordpress_item',
+						array(
+							'params'   => $params,
+							'name'     => $name,
+							'id_field' => $id_field,
+						)
+					);
 				}
 				break;
 		} // End switch().
@@ -675,16 +729,19 @@ class Object_Sync_Sf_WordPress {
 				if ( ! has_filter( $this->option_prefix . 'upsert_custom_wordpress_item' ) ) {
 					$result = $this->post_upsert( $key, $value, $methods, $params, $id_field, $pull_to_drafts, $name, $check_only );
 				} else {
-					$result = apply_filters( $this->option_prefix . 'upsert_custom_wordpress_item', array(
-						'key'            => $key,
-						'value'          => $value,
-						'methods'        => $methods,
-						'params'         => $params,
-						'id_field'       => $id_field,
-						'pull_to_drafts' => $pull_to_drafts,
-						'name'           => $name,
-						'check_only'     => $check_only,
-					) );
+					$result = apply_filters(
+						$this->option_prefix . 'upsert_custom_wordpress_item',
+						array(
+							'key'            => $key,
+							'value'          => $value,
+							'methods'        => $methods,
+							'params'         => $params,
+							'id_field'       => $id_field,
+							'pull_to_drafts' => $pull_to_drafts,
+							'name'           => $name,
+							'check_only'     => $check_only,
+						)
+					);
 				}
 				break;
 		} // End switch().
@@ -750,12 +807,15 @@ class Object_Sync_Sf_WordPress {
 				if ( ! has_filter( $this->option_prefix . 'update_custom_wordpress_item' ) ) {
 					$result = $this->post_update( $id, $params, $id_field, $name );
 				} else {
-					$result = apply_filters( $this->option_prefix . 'update_custom_wordpress_item', array(
-						'id'       => $id,
-						'params'   => $params,
-						'name'     => $name,
-						'id_field' => $id_field,
-					) );
+					$result = apply_filters(
+						$this->option_prefix . 'update_custom_wordpress_item',
+						array(
+							'id'       => $id,
+							'params'   => $params,
+							'name'     => $name,
+							'id_field' => $id_field,
+						)
+					);
 				}
 				break;
 		} // End switch().
@@ -837,10 +897,13 @@ class Object_Sync_Sf_WordPress {
 				if ( ! has_filter( $this->option_prefix . 'delete_custom_wordpress_item' ) ) {
 					$success = $this->post_delete( $id );
 				} else {
-					$success = apply_filters( $this->option_prefix . 'delete_custom_wordpress_item', array(
-						'id'   => $id,
-						'name' => $name,
-					) );
+					$success = apply_filters(
+						$this->option_prefix . 'delete_custom_wordpress_item',
+						array(
+							'id'   => $id,
+							'name' => $name,
+						)
+					);
 				}
 
 				$success = $this->post_delete( $id );
@@ -898,7 +961,7 @@ class Object_Sync_Sf_WordPress {
 			$content   = array();
 			$structure = $this->get_wordpress_table_structure( 'user' );
 			foreach ( $params as $key => $value ) {
-				if ( in_array( $value['method_modify'], $structure['content_methods'] ) ) {
+				if ( in_array( $value['method_modify'], $structure['content_methods'], true ) ) {
 					$content[ $key ] = $value['value'];
 					unset( $params[ $key ] );
 				}
@@ -1122,7 +1185,7 @@ class Object_Sync_Sf_WordPress {
 				continue;
 			}
 
-			if ( 'wp_update_user' === $value['method_modify'] ) {
+			if ( isset( $value['method_modify'] ) && 'wp_update_user' === $value['method_modify'] ) {
 				$content[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
@@ -1184,7 +1247,7 @@ class Object_Sync_Sf_WordPress {
 		$content   = array();
 		$structure = $this->get_wordpress_table_structure( $post_type );
 		foreach ( $params as $key => $value ) {
-			if ( in_array( $value['method_modify'], $structure['content_methods'] ) ) {
+			if ( in_array( $value['method_modify'], $structure['content_methods'], true ) ) {
 				$content[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
@@ -1203,6 +1266,10 @@ class Object_Sync_Sf_WordPress {
 		}
 		if ( ! isset( $content['post_content'] ) ) {
 			$content['post_content'] = ' ';
+		}
+		// use the default post status from the fieldmap if it exists
+		if ( ! isset( $content['post_status'] ) && isset( $content['default_status'] ) ) {
+			$content['post_status'] = $content['default_status'];
 		}
 
 		if ( 'tribe_events' === $content['post_type'] && function_exists( 'tribe_create_event' ) ) {
@@ -1449,7 +1516,7 @@ class Object_Sync_Sf_WordPress {
 		$content              = array();
 		$content[ $id_field ] = $post_id;
 		foreach ( $params as $key => $value ) {
-			if ( 'wp_update_post' === $value['method_modify'] ) {
+			if ( isset( $value['method_modify'] ) && 'wp_update_post' === $value['method_modify'] ) {
 				$content[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
@@ -1457,6 +1524,11 @@ class Object_Sync_Sf_WordPress {
 
 		if ( '' !== $post_type ) {
 			$content['post_type'] = $post_type;
+		}
+
+		// use the default post status from the fieldmap if it exists
+		if ( ! isset( $content['post_status'] ) && isset( $content['default_status'] ) ) {
+			$content['post_status'] = $content['default_status'];
 		}
 
 		$post_id = wp_update_post( $content, true ); // return an error instead of a 0 id
@@ -1516,25 +1588,40 @@ class Object_Sync_Sf_WordPress {
 		// Load all params with a method_modify of the object structure's content_method into $content
 		$content   = array();
 		$structure = $this->get_wordpress_table_structure( 'attachment' );
+
+		// Developers can use this hook to pass filename and parent data for the attachment.
+		$params = apply_filters( $this->option_prefix . 'set_initial_attachment_data', $params );
+
 		// WP requires post_title, post_content (can be empty), post_status, and post_mime_type to create an attachment.
 		foreach ( $params as $key => $value ) {
-			if ( in_array( $value['method_modify'], $structure['content_methods'] ) ) {
+			if ( in_array( $value['method_modify'], $structure['content_methods'], true ) ) {
 				$content[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
 		}
 
-		// Developers can use this hook to pass filename and parent data for the attachment.
-		$params = apply_filters( $this->option_prefix . 'set_initial_attachment_data', $params );
+		// WordPress post creation will fail with an object of 0 if there is no title or content
+		// I think we should allow this to happen and not make users' data decisions, so
+		// if we're receiving nothing for either of these, create a blank one so it doesn't fail
+		// here we have to use $content because $params has already been unset
+		if ( ! isset( $content['post_title'] ) ) {
+			$content['post_title'] = ' ';
+		}
+		if ( ! isset( $content['post_content'] ) ) {
+			$content['post_content'] = ' ';
+		}
+		if ( ! isset( $content['post_status'] ) && isset( $content['default_status'] ) ) {
+			$content['post_status'] = $content['default_status'];
+		}
 
-		if ( isset( $params['filename']['value'] ) ) {
-			$filename = $params['filename']['value'];
+		if ( isset( $content['filename']['value'] ) ) {
+			$filename = $content['filename']['value'];
 		} else {
 			$filename = false;
 		}
 
-		if ( isset( $params['parent']['value'] ) ) {
-			$parent = $params['parent']['value'];
+		if ( isset( $content['parent']['value'] ) ) {
+			$parent = $content['parent']['value'];
 		} else {
 			$parent = 0;
 		}
@@ -1764,21 +1851,39 @@ class Object_Sync_Sf_WordPress {
 	private function attachment_update( $attachment_id, $params, $id_field = 'ID' ) {
 		$content              = array();
 		$content[ $id_field ] = $attachment_id;
+
+		// Developers can use this hook to pass filename and parent data for the attachment.
+		$params = apply_filters( $this->option_prefix . 'set_initial_attachment_data', $params );
+
 		foreach ( $params as $key => $value ) {
-			if ( 'wp_insert_attachment' === $value['method_modify'] ) { // Should also be insert attachment maybe.
+			if ( isset( $value['method_modify'] ) && 'wp_insert_attachment' === $value['method_modify'] ) { // Should also be insert attachment maybe.
 				$content[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
 		}
 
-		if ( isset( $params['filename']['value'] ) ) {
-			$filename = $params['filename']['value'];
+		// WordPress post creation will fail with an object of 0 if there is no title or content
+		// I think we should allow this to happen and not make users' data decisions, so
+		// if we're receiving nothing for either of these, create a blank one so it doesn't fail
+		// here we have to use $content because $params has already been unset
+		if ( ! isset( $content['post_title'] ) ) {
+			$content['post_title'] = ' ';
+		}
+		if ( ! isset( $content['post_content'] ) ) {
+			$content['post_content'] = ' ';
+		}
+		if ( ! isset( $content['post_status'] ) && isset( $content['default_status'] ) ) {
+			$content['post_status'] = $content['default_status'];
+		}
+
+		if ( isset( $content['filename']['value'] ) ) {
+			$filename = $content['filename']['value'];
 		} else {
 			$filename = false;
 		}
 
-		if ( isset( $params['parent']['value'] ) ) {
-			$parent = $params['parent']['value'];
+		if ( isset( $content['parent']['value'] ) ) {
+			$parent = $content['parent']['value'];
 		} else {
 			$parent = 0;
 		}
@@ -1881,7 +1986,7 @@ class Object_Sync_Sf_WordPress {
 				$name = $value['value'];
 				unset( $params[ $key ] );
 			}
-			if ( in_array( $value['method_modify'], $structure['content_methods'] ) && 'name' !== $key ) {
+			if ( in_array( $value['method_modify'], $structure['content_methods'], true ) && 'name' !== $key ) {
 				$args[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
@@ -2091,7 +2196,7 @@ class Object_Sync_Sf_WordPress {
 		}
 		$args = array();
 		foreach ( $params as $key => $value ) {
-			if ( 'wp_update_term' === $value['method_modify'] ) {
+			if ( isset( $value['method_modify'] ) && 'wp_update_term' === $value['method_modify'] ) {
 				$args[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
@@ -2163,7 +2268,7 @@ class Object_Sync_Sf_WordPress {
 		$content   = array();
 		$structure = $this->get_wordpress_table_structure( 'comment' );
 		foreach ( $params as $key => $value ) {
-			if ( in_array( $value['method_modify'], $structure['content_methods'] ) ) {
+			if ( in_array( $value['method_modify'], $structure['content_methods'], true ) ) {
 				$content[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
@@ -2184,6 +2289,10 @@ class Object_Sync_Sf_WordPress {
 		}
 		if ( ! isset( $content['comment_type'] ) ) {
 			$content['comment_type'] = '';
+		}
+		// use the default comment status from the fieldmap if it exists
+		if ( ! isset( $content['comment_approved'] ) && isset( $content['default_status'] ) ) {
+			$content['comment_approved'] = $content['default_status'];
 		}
 
 		$comment_id = wp_new_comment( $content );
@@ -2418,10 +2527,15 @@ class Object_Sync_Sf_WordPress {
 		$content              = array();
 		$content[ $id_field ] = $comment_id;
 		foreach ( $params as $key => $value ) {
-			if ( 'wp_update_comment' === $value['method_modify'] ) {
+			if ( isset( $value['method_modify'] ) && 'wp_update_comment' === $value['method_modify'] ) {
 				$content[ $key ] = $value['value'];
 				unset( $params[ $key ] );
 			}
+		}
+
+		// use the default comment status from the fieldmap if it exists
+		if ( ! isset( $content['comment_approved'] ) && isset( $content['default_status'] ) ) {
+			$content['comment_approved'] = $content['default_status'];
 		}
 
 		$updated = wp_update_comment( $content );
@@ -2533,7 +2647,7 @@ class Object_Sync_Sf_WordPress {
 		if ( ! is_wp_error( $parent_object_id ) && is_array( $params ) && ! empty( $params ) ) {
 			$changed = true;
 			foreach ( $params as $key => $value ) {
-				$modify = $value['method_modify'];
+				$modify = isset( $value['method_modify'] ) ? $value['method_modify'] : '';
 
 				// if the value is empty, use the delete method to modify it
 				if ( '' === $value['value'] ) {
@@ -2552,6 +2666,10 @@ class Object_Sync_Sf_WordPress {
 						$new_value = maybe_serialize( $value['value'] );
 					} else {
 						$new_value = (string) $value['value'];
+					}
+
+					if ( '' === $read ) {
+						continue;
 					}
 
 					if ( is_array( $read( $parent_object_id, $key, true ) ) ) {
